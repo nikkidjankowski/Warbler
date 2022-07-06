@@ -138,13 +138,14 @@ class User(db.Model):
         """
 
         hashed_pwd = bcrypt.generate_password_hash(password).decode('UTF-8')
-
+       
         user = User(
             username=username,
             email=email,
             password=hashed_pwd,
             image_url=image_url,
         )
+  
 
         db.session.add(user)
         return user
@@ -159,11 +160,14 @@ class User(db.Model):
 
         If can't find matching user (or if password is wrong), returns False.
         """
+        print(password)
 
         user = cls.query.filter_by(username=username).first()
 
         if user:
             is_auth = bcrypt.check_password_hash(user.password, password)
+            print(user.password)
+            print(password)
             if is_auth:
                 return user
 

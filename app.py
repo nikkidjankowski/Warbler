@@ -1,11 +1,11 @@
 import os
 
-from flask import Flask, render_template, request, flash, redirect, session, g
+from flask import Flask, render_template, request, flash, redirect, session, g, abort
 from flask_debugtoolbar import DebugToolbarExtension
 from sqlalchemy.exc import IntegrityError
 
-from forms import UserAddForm, LoginForm, MessageForm
-from models import db, connect_db, User, Message
+from forms import UserAddForm, LoginForm, MessageForm, UserEditForm
+from models import db, connect_db, User, Message, Follows, Likes
 
 CURR_USER_KEY = "curr_user"
 
@@ -18,12 +18,13 @@ app.config['SQLALCHEMY_DATABASE_URI'] = (
 
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ECHO'] = False
-app.config['DEBUG_TB_INTERCEPT_REDIRECTS'] = True
+app.config['DEBUG_TB_INTERCEPT_REDIRECTS'] = False
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', "it's a secret")
 toolbar = DebugToolbarExtension(app)
 
 connect_db(app)
 
+    
 
 ##############################################################################
 # User signup/login/logout
@@ -31,6 +32,8 @@ connect_db(app)
 
 @app.before_request
 def add_user_to_g():
+    
+    
     """If we're logged in, add curr user to Flask global."""
 
     if CURR_USER_KEY in session:
@@ -40,17 +43,21 @@ def add_user_to_g():
         g.user = None
 
 
+
 def do_login(user):
     """Log in user."""
 
     session[CURR_USER_KEY] = user.id
-
+    
 
 def do_logout():
     """Logout user."""
 
     if CURR_USER_KEY in session:
         del session[CURR_USER_KEY]
+        
+
+    
 
 
 @app.route('/signup', methods=["GET", "POST"])
@@ -64,7 +71,7 @@ def signup():
     If the there already is a user with that username: flash message
     and re-present form.
     """
-
+  
     form = UserAddForm()
 
     if form.validate_on_submit():
@@ -92,7 +99,7 @@ def signup():
 @app.route('/login', methods=["GET", "POST"])
 def login():
     """Handle user login."""
-
+ 
     form = LoginForm()
 
     if form.validate_on_submit():
@@ -105,13 +112,17 @@ def login():
             return redirect("/")
 
         flash("Invalid credentials.", 'danger')
-
+    
     return render_template('users/login.html', form=form)
 
 
 @app.route('/logout')
 def logout():
     """Handle logout of user."""
+    do_logout()
+    flash("goodbye")
+
+    return redirect("/login")
 
     # IMPLEMENT THIS
 
@@ -125,6 +136,7 @@ def list_users():
 
     Can take a 'q' param in querystring to search by that username.
     """
+
 
     search = request.args.get('q')
 
@@ -210,8 +222,29 @@ def stop_following(follow_id):
 @app.route('/users/profile', methods=["GET", "POST"])
 def profile():
     """Update profile for current user."""
+    
+    if not g.user:
+        flash("Access unauthorized.", "danger")
+        return redirect("/users")
 
-    # IMPLEMENT THIS
+    user = g.user
+    form = UserEditForm(obj=user)
+
+    if form.validate_on_submit():
+        if User.authenticate(user.username, form.password.data):
+            user.username = form.username.data
+            user.email = form.email.data
+            user.image_url = form.image_url.data or "/static/images/default-pic.png"
+            user.header_image_url = form.header_image_url.data or "/static/images/warbler-hero.jpg"
+            user.bio = form.bio.data
+
+            db.session.commit()
+            return redirect(f"/users/{user.id}")
+
+        flash("Wrong password, please try again.", 'danger')
+
+    return render_template('users/edit.html', form=form, user_id=user.id)
+
 
 
 @app.route('/users/delete', methods=["POST"])
@@ -290,18 +323,55 @@ def homepage():
     - anon users: no messages
     - logged in: 100 most recent messages of followed_users
     """
+    
 
     if g.user:
+        following_ids = [f.id for f in g.user.following] + [g.user.id]
+
         messages = (Message
                     .query
+                    .filter(Message.user_id.in_(following_ids))
                     .order_by(Message.timestamp.desc())
                     .limit(100)
                     .all())
+       
+        
 
         return render_template('home.html', messages=messages)
 
     else:
         return render_template('home-anon.html')
+
+@app.route('/users/<int:user_id>/likes', methods=["GET"])
+def show_likes(user_id):
+    if not g.user:
+        flash("Access unauthorized.", "danger")
+        return redirect("/")
+
+    user = User.query.get_or_404(user_id)
+    return render_template('users/likes.html', user=user, likes=user.likes)
+
+@app.route('/messages/<int:message_id>/likes', methods=["POST"])
+def addlike(message_id):
+    if not g.user:
+        flash("Access unauthorized.", "danger")
+        return redirect("/")
+
+    liked_m = Message.query.get(message_id)
+
+    if liked_m.user_id == g.user.id:
+        return abort(403)
+
+    user_likes = g.user.likes
+
+    if liked_m in user_likes:
+        g.user.likes = [like for like in user_likes if like != liked_m]
+    else:
+        g.user.likes.append(liked_m)
+
+    db.session.commit()
+
+    return redirect("/")
 
 
 ##############################################################################
